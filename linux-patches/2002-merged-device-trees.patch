@@ -1,0 +1,177 @@
+diff --git a/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero-w.dts b/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero-w.dts
+index f6d4e2c73df9..dfc23c49eb18 100644
+--- a/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero-w.dts
++++ b/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero-w.dts
+@@ -239,6 +239,69 @@ cam0_reg: &cam_dummy_reg {
+ i2c_vc: &i2c0 {};
+ i2c_csi_dsi0: &i2c0 {};
+ 
++&soc {
++	select_btn {
++		compatible = "brcm,select-btn";
++		btn-gpios = <&gpio 19 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
++	};
++};
++
++/* BEGIN dwc2-overlay.dts */
++&usb {
++	compatible = "brcm,bcm2835-usb";
++	dr_mode = "peripheral";
++	g-np-tx-fifo-size = <32>;
++	g-rx-fifo-size = <558>;
++	g-tx-fifo-size = <512 512 512 512 512 256 256>;
++	status = "okay";
++};
++/* END dwc2-overlay.dts */
++
++/* BEGIN disable-bt-overlay.dts */
++&uart1 {
++	status = "disabled";
++};
++
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0_pins>;
++	status = "okay";
++};
++
++&bt {
++	status = "disabled";
++};
++
++&uart0_pins {
++	brcm,pins;
++	brcm,function;
++	brcm,pull;
++};
++
++&bt_pins {
++	brcm,pins;
++	brcm,function;
++	brcm,pull;
++};
++
++/ {
++	aliases {
++		serial0 = "/soc/serial@7e201000";
++		serial1 = "/soc/serial@7e215040";
++	};
++};
++/* END disable-bt-overlay.dts */
++
++/* BEGIN disable-wifi-overlay.dts */
++&mmc {
++	status = "disabled";
++};
++
++&mmcnr {
++	status = "disabled";
++};
++/* END disable-wifi-overlay.dts */
++
+ / {
+ 	__overrides__ {
+ 		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_hdmi=0'}";
+diff --git a/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero.dts b/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero.dts
+index 1721be8dbe20..8ed26a138f03 100644
+--- a/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero.dts
++++ b/arch/arm/boot/dts/broadcom/bcm2708-rpi-zero.dts
+@@ -178,6 +178,24 @@ cam0_reg: &cam_dummy_reg {
+ i2c_vc: &i2c0 {};
+ i2c_csi_dsi0: &i2c0 {};
+ 
++&soc {
++	select_btn {
++		compatible = "brcm,select-btn";
++		btn-gpios = <&gpio 19 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
++	};
++};
++
++/* BEGIN dwc2-overlay.dts */
++&usb {
++	compatible = "brcm,bcm2835-usb";
++	dr_mode = "peripheral";
++	g-np-tx-fifo-size = <32>;
++	g-rx-fifo-size = <558>;
++	g-tx-fifo-size = <512 512 512 512 512 256 256>;
++	status = "okay";
++};
++/* END dwc2-overlay.dts */
++
+ / {
+ 	__overrides__ {
+ 		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_hdmi=0'}";
+diff --git a/arch/arm/boot/dts/broadcom/bcm2710-rpi-zero-2-w.dts b/arch/arm/boot/dts/broadcom/bcm2710-rpi-zero-2-w.dts
+index 16971e50229f..c77f926b1694 100644
+--- a/arch/arm/boot/dts/broadcom/bcm2710-rpi-zero-2-w.dts
++++ b/arch/arm/boot/dts/broadcom/bcm2710-rpi-zero-2-w.dts
+@@ -246,6 +246,69 @@ cam0_reg: &cam_dummy_reg {
+ i2c_csi_dsi0: &i2c0 {
+ };
+ 
++&soc {
++	select_btn {
++		compatible = "brcm,select-btn";
++		btn-gpios = <&gpio 19 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
++	};
++};
++
++/* BEGIN dwc2-overlay.dts */
++&usb {
++	compatible = "brcm,bcm2835-usb";
++	dr_mode = "peripheral";
++	g-np-tx-fifo-size = <32>;
++	g-rx-fifo-size = <558>;
++	g-tx-fifo-size = <512 512 512 512 512 256 256>;
++	status = "okay";
++};
++/* END dwc2-overlay.dts */
++
++/* BEGIN disable-bt-overlay.dts */
++&uart1 {
++	status = "disabled";
++};
++
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0_pins>;
++	status = "okay";
++};
++
++&bt {
++	status = "disabled";
++};
++
++&uart0_pins {
++	brcm,pins;
++	brcm,function;
++	brcm,pull;
++};
++
++&bt_pins {
++	brcm,pins;
++	brcm,function;
++	brcm,pull;
++};
++
++/ {
++	aliases {
++		serial0 = "/soc/serial@7e201000";
++		serial1 = "/soc/serial@7e215040";
++	};
++};
++/* END disable-bt-overlay.dts */
++
++/* BEGIN disable-wifi-overlay.dts */
++&mmc {
++	status = "disabled";
++};
++
++&mmcnr {
++	status = "disabled";
++};
++/* END disable-wifi-overlay.dts */
++
+ / {
+ 	__overrides__ {
+ 		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_hdmi=0'}";

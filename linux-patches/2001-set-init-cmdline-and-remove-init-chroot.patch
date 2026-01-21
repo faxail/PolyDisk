@@ -1,0 +1,41 @@
+diff --git a/init/do_mounts.c b/init/do_mounts.c
+index 21d065a55ad8..907094e20b26 100644
+--- a/init/do_mounts.c
++++ b/init/do_mounts.c
+@@ -29,7 +29,7 @@
+ #include "do_mounts.h"
+ 
+ int root_mountflags = MS_RDONLY | MS_SILENT;
+-static char __initdata saved_root_name[64];
++static char __initdata saved_root_name[64] = "/dev/mmcblk0p1";
+ static int root_wait;
+ 
+ dev_t ROOT_DEV;
+@@ -110,14 +110,14 @@ static int __init root_data_setup(char *str)
+ 	return 1;
+ }
+ 
+-static char * __initdata root_fs_names;
++static char * __initdata root_fs_names = "vfat";
+ static int __init fs_names_setup(char *str)
+ {
+ 	root_fs_names = str;
+ 	return 1;
+ }
+ 
+-static unsigned int __initdata root_delay;
++static unsigned int __initdata root_delay = 2;
+ static int __init root_delay_setup(char *str)
+ {
+ 	root_delay = simple_strtoul(str, NULL, 0);
+@@ -489,8 +489,8 @@ void __init prepare_namespace(void)
+ 	mount_root(saved_root_name);
+ out:
+ 	devtmpfs_mount();
+-	init_mount(".", "/", NULL, MS_MOVE, NULL);
+-	init_chroot(".");
++	//init_mount(".", "/", NULL, MS_MOVE, NULL);
++	//init_chroot(".");
+ }
+ 
+ static bool is_tmpfs;

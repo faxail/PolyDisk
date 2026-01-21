@@ -1,0 +1,853 @@
+diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
+index 3a80600d6806..4f798db5721f 100644
+--- a/drivers/usb/gadget/configfs.c
++++ b/drivers/usb/gadget/configfs.c
+@@ -12,6 +12,8 @@
+ #include "u_f.h"
+ #include "u_os_desc.h"
+ 
++#include "../fs/configfs/configfs_internal.h"
++
+ int check_user_usb_string(const char *name,
+ 		struct usb_gadget_strings *stringtab_dev)
+ {
+@@ -2098,3 +2100,341 @@ static void __exit gadget_cfs_exit(void)
+ 	configfs_unregister_subsystem(&gadget_subsys);
+ }
+ module_exit(gadget_cfs_exit);
++
++static u16 saved_idVendor = 0x1d6b;
++static u16 saved_idProduct = 0x0104;
++static u16 saved_bcdDevice = 0x0100;
++
++static int __init polydisk_usbids_setup(char *line)
++{
++	printk("polydisk_usbids_setup(%s)\n", line);
++
++	char idVendor[5] = { '\0' };
++	char idProduct[5] = { '\0' };
++	char bcdDevice[5] = { '\0' };
++
++	unsigned int pos = 0;
++	for (int i = 0; line[i] != '\0'; i++) {
++		char c = line[i];
++		if (c == ':') {
++			if ((pos & 0b11) != 0) {
++				pos = (pos & ~0b11) + 4;
++			}
++		} else if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
++				(c >= 'A' && c <= 'F')) {
++			switch (pos >> 2) {
++				case 0:
++				{
++					idVendor[pos] = c;
++					break;
++				}
++				case 1:
++				{
++					idProduct[pos - 4] = c;
++					break;
++				}
++				case 2:
++				{
++					bcdDevice[pos - 8] = c;
++					break;
++				}
++				default:
++				{
++					return 1;
++				}
++			}
++			pos++;
++		} else {
++			return 1;
++		}
++	}
++
++	printk("polydisk_usbids_setup: idVendor=%s\n", idVendor);
++	printk("polydisk_usbids_setup: idProduct=%s\n", idProduct);
++	printk("polydisk_usbids_setup: bcdDevice=%s\n", bcdDevice);
++
++	if (idVendor[0] != '\0' && idProduct[0] != '\0') {
++		int ret = kstrtou16(idVendor, 16, &saved_idVendor);
++		if (ret != 0) {
++			return ret;
++		}
++		ret = kstrtou16(idProduct, 16, &saved_idProduct);
++		if (ret != 0) {
++			return ret;
++		}
++	}
++	if (bcdDevice[0] != '\0') {
++		return kstrtou16(bcdDevice, 16, &saved_bcdDevice);
++	}
++
++	return 0;
++}
++
++__setup("usbids=", polydisk_usbids_setup);
++
++struct saved_string_entry {
++	u16 lang;
++	char type;
++	char size;
++} __packed;
++
++static char saved_strings[1024] = { 0 };
++static int saved_strings_len = 0;
++
++static int __init polydisk_strings_setup(char *line)
++{
++	printk("polydisk_strings_setup(%s)\n", line);
++
++	if (str_has_prefix(line, "0x")) {
++		line += 2;
++	}
++
++	char *attr = strchr(line, '_');
++	char *value = strchr(line, '=');
++	if (attr == NULL || value == NULL || attr - line < 1 || attr - line > 4 || value - attr < 1) {
++		return 1;
++	}
++
++	char lang_hex[5] = { 0 };
++	strncpy(lang_hex, line, attr - line < 4 ? attr - line : 4);
++
++	attr++;
++	value++;
++
++	u16 lang;
++	int ret = kstrtou16(lang_hex, 16, &lang);
++	if (ret != 0) {
++		printk("polydisk_strings_setup: invalid lang: %s\n", lang_hex);
++		return 1;
++	}
++
++	size_t value_len = strlen(value);
++	if (value_len > 255) {
++		printk("polydisk_strings_setup: string too big\n");
++		return -EOVERFLOW;
++	}
++	else if (saved_strings_len + sizeof(struct saved_string_entry) + value_len + 1 > sizeof(saved_strings)) {
++		printk("polydisk_strings_setup: maximum strings exceeded\n");
++		return -EOVERFLOW;
++	}
++
++	char type = 0;
++	if (str_has_prefix(attr, "manufacturer=")) {
++		type = 1;
++	} else if (str_has_prefix(attr, "product=")) {
++		type = 2;
++	} else if (str_has_prefix(attr, "serialnumber=")) {
++		type = 3;
++	} else {
++		printk("polydisk_strings_setup: invalid string descriptor: %s\n", attr);
++		return 1;
++	}
++
++	struct saved_string_entry entry = {
++		.lang = lang,
++		.type = type,
++		.size = value_len,
++	};
++
++	((struct saved_string_entry*)(saved_strings + saved_strings_len))[0] = entry;
++	saved_strings_len += sizeof(struct saved_string_entry);
++
++	strcpy(saved_strings + saved_strings_len, value);
++	saved_strings_len += value_len + 1;
++
++	return 0;
++}
++
++__setup("strings_", polydisk_strings_setup);
++
++static int polydisk_create_strings(struct gadget_info *gi)
++{
++	int ret;
++	int created_langs_len = 0;
++	u16 created_langs[MAX_USB_STRING_LANGS];
++	struct config_group *created_lang_groups[MAX_USB_STRING_LANGS];
++
++	for (int i = 0; i < sizeof(saved_strings) - sizeof(struct saved_string_entry); ) {
++		struct saved_string_entry entry = ((struct saved_string_entry*)(saved_strings + i))[0];
++		if (entry.lang == 0 || entry.type == 0) {
++			break;
++		}
++
++		i += sizeof(struct saved_string_entry);
++
++		char *value = saved_strings + i;
++
++		struct config_group *lang_group = NULL;
++		for (int i = 0; i < created_langs_len; i++) {
++			if (created_langs[i] == entry.lang) {
++				lang_group = created_lang_groups[i];
++				break;
++			}
++		}
++
++		if (lang_group == NULL) {
++			if (created_langs_len >= MAX_USB_STRING_LANGS) {
++				printk("polydisk_create_strings: maximum usb string languages exceeded\n");
++				return -EOVERFLOW;
++			}
++
++			char lang_hex[7];
++			ret = snprintf(lang_hex, sizeof(lang_hex), "0x%04x", entry.lang);
++			if (ret != 6) {
++				printk("could not format lang: %d\n", ret);
++				return 1;
++			}
++
++			lang_group = gadget_language_make(&gi->strings_group, lang_hex);
++			if (IS_ERR(lang_group)) {
++				printk("gadget_language_make failed: %d\n", (int)lang_group);
++				return (int)lang_group;
++			}
++
++			ret = configfs_register_group(&gi->strings_group, lang_group);
++			if (ret != 0) {
++				printk("configfs_register_group(lang_group) failed: %d\n", ret);
++				return ret;
++			}
++
++			created_langs[created_langs_len] = entry.lang;
++			created_lang_groups[created_langs_len] = lang_group;
++			created_langs_len++;
++		}
++
++		if (entry.type == 1) {
++			ret = (int)gadget_language_manufacturer_store(&lang_group->cg_item, value, entry.size);
++		} else if (entry.type == 2) {
++			ret = (int)gadget_language_product_store(&lang_group->cg_item, value, entry.size);
++		} else if (entry.type == 3) {
++			ret = (int)gadget_language_serialnumber_store(&lang_group->cg_item, value, entry.size);
++		} else {
++			ret = 0;
++		}
++
++		if (ret <= 0) {
++			printk("polydisk_create_strings: setting USB string (type %d) failed: %d\n", entry.type, ret);
++			return ret;
++		}
++
++		i += entry.size + 1;
++	}
++
++	return 0;
++}
++
++int setup_polydisk_gadget(int (*setup_fsg_func)(struct config_group *function_group))
++{
++	int ret;
++
++	struct config_group *g_group = gadgets_make(&gadget_subsys.su_group, "g0");
++	if (IS_ERR(g_group)) {
++		printk("gadgets_make failed: %d\n", (int)g_group);
++		return (int)g_group;
++	}
++
++	ret = configfs_register_group(&gadget_subsys.su_group, g_group);
++	if (ret != 0) {
++		printk("configfs_register_group(g_group) failed: %d\n", ret);
++		return ret;
++	}
++
++	struct gadget_info *gi =
++		container_of(g_group, struct gadget_info, group);
++
++	printk("configuring gadget with idVendor=%04x idProduct=%04x bcdDevice=%04x\n",
++	    saved_idVendor, saved_idProduct, saved_bcdDevice);
++
++	gi->cdev.desc.idVendor = saved_idVendor;
++	gi->cdev.desc.idProduct = saved_idProduct;
++	gi->cdev.desc.bcdDevice = saved_bcdDevice;
++	gi->cdev.desc.bcdUSB = 0x0200;
++
++	struct config_group *f_group = function_make(&gi->functions_group, "mass_storage.usb0");
++	if (IS_ERR(f_group)) {
++		printk("function_make failed: %d\n", (int)f_group);
++		return (int)f_group;
++	}
++
++	ret = configfs_register_group(&gi->functions_group, f_group);
++	if (ret != 0) {
++		printk("configfs_register_group(f_group) failed: %d\n", ret);
++		return ret;
++	}
++
++	ret = setup_fsg_func(f_group);
++	bool image_configured = ret > 0;
++	if (ret < 0) {
++		printk("setup_polydisk_fsg failed: %d\n", ret);
++		return ret;
++	}
++
++	if (image_configured) {
++		ret = polydisk_create_strings(gi);
++		if (ret != 0) {
++			printk("polydisk_create_strings failed: %d\n", ret);
++			return ret;
++		}
++	}
++
++	struct config_group *c1_group = config_desc_make(&gi->configs_group, "c.1");
++	if (IS_ERR(c1_group)) {
++		printk("config_desc_make failed: %d\n", (int)c1_group);
++		return (int)c1_group;
++	}
++
++	ret = configfs_register_group(&gi->configs_group, c1_group);
++	if (ret != 0) {
++		printk("configfs_register_group(c1_group) failed: %d\n", ret);
++		return ret;
++	}
++
++	struct config_usb_cfg *cfg = to_config_usb_cfg(&c1_group->cg_item);
++	cfg->c.MaxPower = 300;
++
++	struct dentry *c1_f_dentry =
++		d_alloc_name(c1_group->cg_item.ci_dentry, "mass_storage.usb0");
++
++	if (IS_ERR(c1_f_dentry)) {
++		printk("d_alloc_name failed: %d\n", (int)c1_f_dentry);
++		return (int)c1_f_dentry;
++	}
++
++	ret = config_usb_cfg_link(&c1_group->cg_item, &f_group->cg_item);
++	if (ret != 0) {
++		printk("config_usb_cfg_link(c1_group, f_group) failed: %d\n",
++			ret);
++		return ret;
++	}
++
++	ret = configfs_create_link(
++		f_group->cg_item.ci_dentry->d_fsdata,
++		c1_group->cg_item.ci_dentry, c1_f_dentry,
++		"../../../../usb_gadget/g0/functions/mass_storage.usb0");
++	if (ret != 0) {
++		printk("configfs_create_link c1_group -> f_group failed: %d\n",
++			ret);
++		return ret;
++	}
++
++	if (image_configured) {
++		char *udc = usb_get_gadget_udc_name();
++		if (!udc) {
++			printk("no UDC found\n");
++			return -ENOENT;
++		} else if (IS_ERR(udc)) {
++			printk("usb_get_gadget_udc_name failed: %d\n", (int)udc);
++			return (int)udc;
++		}
++
++		ret = (int)gadget_dev_desc_UDC_store(&g_group->cg_item, udc,
++			strlen(udc));
++		kfree(udc);
++		if (ret < 0) {
++			printk("gadget_dev_desc_UDC_store failed: %d\n", ret);
++			return ret;
++		}
++	}
++
++	return 0;
++}
+diff --git a/drivers/usb/gadget/configfs.h b/drivers/usb/gadget/configfs.h
+index 3b6f5298b2e8..ad86d2640c54 100644
+--- a/drivers/usb/gadget/configfs.h
++++ b/drivers/usb/gadget/configfs.h
+@@ -18,4 +18,7 @@ static inline struct usb_os_desc *to_usb_os_desc(struct config_item *item)
+ 	return container_of(to_config_group(item), struct usb_os_desc, group);
+ }
+ 
++int setup_polydisk_gadget(
++	int (*setup_fsg_func)(struct config_group *function_group));
++
+ #endif /*  USB__GADGET__CONFIGFS__H */
+diff --git a/drivers/usb/gadget/function/f_mass_storage.c b/drivers/usb/gadget/function/f_mass_storage.c
+index c265a1f62fc1..3ddea23bd8c1 100644
+--- a/drivers/usb/gadget/function/f_mass_storage.c
++++ b/drivers/usb/gadget/function/f_mass_storage.c
+@@ -198,6 +198,12 @@
+ 
+ #include "configfs.h"
+ 
++#include <linux/namei.h>
++#include "../drivers/leds/leds.h"
++#include "../fs/internal.h"
++#include <linux/gpio/consumer.h>
++#include <linux/platform_device.h>
++#include <linux/mod_devicetable.h>
+ 
+ /*------------------------------------------------------------------------*/
+ 
+@@ -3616,3 +3622,468 @@ void fsg_config_from_params(struct fsg_config *cfg,
+ 	cfg->fsg_num_buffers = fsg_num_buffers;
+ }
+ EXPORT_SYMBOL_GPL(fsg_config_from_params);
++
++static volatile int imgs_mounted = 0;
++
++const dev_t IMGS_DEV = MKDEV(179, 2);
++
++static struct led_classdev *act_led;
++
++static struct timespec64 fsg_boottime_soc = { 0, 0 };
++static struct timespec64 fsg_boottime_kernel = { 0, 0 };
++
++static char saved_image[1024] = "";
++
++static int __init polydisk_image_setup(char *line)
++{
++	printk("polydisk_image_setup(%s)\n", line);
++
++	int ret = strscpy(saved_image, line, sizeof(saved_image));
++	return ret <= 0 ? ret : 1;
++}
++
++__setup("image=", polydisk_image_setup);
++
++static unsigned int saved_image_cdrom = 1;
++static unsigned int saved_image_ro = 1;
++
++static int __init polydisk_image_type_setup(char *line)
++{
++	printk("polydisk_image_type_setup(%s)\n", line);
++
++	if (strcmp(line, "rw") == 0) {
++		saved_image_cdrom = 0;
++		saved_image_ro = 0;
++	} else if (strcmp(line, "ro") == 0) {
++		saved_image_cdrom = 0;
++		saved_image_ro = 1;
++	} else {
++		saved_image_cdrom = 1;
++		saved_image_ro = 1;
++	}
++
++	return 1;
++}
++
++__setup("image_type=", polydisk_image_type_setup);
++
++static char saved_images_fs[16] = "vfat";
++
++static int __init polydisk_images_fs_setup(char *line)
++{
++	printk("polydisk_images_fs_setup(%s)\n", line);
++
++	int ret = strscpy(saved_images_fs, line,
++		sizeof(saved_images_fs));
++	return ret <= 0 ? ret : 1;
++}
++
++__setup("images_fs=", polydisk_images_fs_setup);
++
++static char saved_inquiry_vendor[9] = "Linux";
++
++static int __init polydisk_inquiry_vendor_setup(char *line)
++{
++	printk("polydisk_inquiry_vendor_setup(%s)\n", line);
++
++	int ret = strscpy(saved_inquiry_vendor, line,
++		sizeof(saved_inquiry_vendor));
++	return ret <= 0 ? ret : 1;
++}
++
++__setup("inquiry_vendor=", polydisk_inquiry_vendor_setup);
++
++static char saved_inquiry_product[17] = "PolyDisk";
++
++static int __init polydisk_inquiry_product_setup(char *line)
++{
++	printk("polydisk_inquiry_product_setup(%s)\n", line);
++
++	int ret = strscpy(saved_inquiry_product, line,
++		sizeof(saved_inquiry_product));
++	return ret <= 0 ? ret : 1;
++}
++
++__setup("inquiry_product=", polydisk_inquiry_product_setup);
++
++static char saved_inquiry_revision[5] = "0100";
++
++static int __init polydisk_inquiry_revision_setup(char *line)
++{
++	printk("polydisk_inquiry_revision_setup(%s)\n", line);
++
++	int ret = strscpy(saved_inquiry_revision, line,
++		sizeof(saved_inquiry_revision));
++	return ret <= 0 ? ret : 1;
++}
++
++__setup("inquiry_revision=", polydisk_inquiry_revision_setup);
++
++static struct gpio_desc *select_btn_gpio = NULL;
++static bool select_btn_pressed_init = false;
++
++static bool get_select_btn_pressed(void) {
++	int value = gpiod_get_value(select_btn_gpio);
++	if (value < 0) {
++		printk("gpiod_get_value(btn) failed: %d\n", value);
++		return false;
++	}
++
++	return value != 0;
++}
++
++static int gpio_select_btn_probe(struct platform_device *pdev)
++{
++	printk("begin gpio_select_btn_probe\n");
++
++	struct gpio_desc *gpio_btn =
++		gpiod_get(&pdev->dev, "btn", GPIOD_IN);
++	if (gpio_btn == NULL || IS_ERR(gpio_btn)) {
++		printk("gpiod_get(btn) failed: %d\n", (int)gpio_btn);
++		return (int)gpio_btn;
++	}
++
++	select_btn_gpio = gpio_btn;
++	select_btn_pressed_init = get_select_btn_pressed();
++
++	printk("end gpio_select_btn_probe select_btn_pressed_init: %d\n",
++		select_btn_pressed_init ? 1 : 0);
++	return 0;
++}
++
++static const struct of_device_id of_gpio_select_btn_match[] = {
++	{
++		.compatible = "brcm,select-btn",
++	},
++	{ },
++};
++MODULE_DEVICE_TABLE(of, of_gpio_select_btn_match);
++
++static struct platform_driver gpio_select_btn_driver = {
++	.probe = gpio_select_btn_probe,
++	.driver = {
++		.name = "select_btn",
++		.of_match_table = of_gpio_select_btn_match,
++	},
++};
++
++module_platform_driver(gpio_select_btn_driver);
++
++static struct led_classdev *led_get_first(void)
++{
++	struct led_classdev *led_cdev;
++
++	down_read(&leds_list_lock);
++	list_for_each_entry(led_cdev, &leds_list, node) {
++		up_read(&leds_list_lock);
++		return led_cdev;
++	}
++
++	up_read(&leds_list_lock);
++	return NULL;
++}
++
++static struct led_trigger *led_trigger_get_by_name(const char *name)
++{
++	struct led_trigger *trig;
++
++	list_for_each_entry(trig, &trigger_list, next_trig) {
++		if (sysfs_streq(name, trig->name)) {
++			return trig;
++		}
++	}
++
++	return ERR_PTR(-EINVAL);
++}
++
++static int set_led(const char *trigger_name)
++{
++	int ret = -ENODEV;
++	if (act_led) {
++		struct led_trigger *trigger =
++			led_trigger_get_by_name(trigger_name);
++		if (!trigger) {
++			printk("led trigger not found: %s\n", trigger_name);
++			return -ENOENT;
++		}
++
++		down_write(&act_led->trigger_lock);
++		ret = led_trigger_set(act_led, trigger);
++		if (ret != 0) {
++			printk("led_trigger_set failed: %d\n", ret);
++		}
++		up_write(&act_led->trigger_lock);
++	}
++
++	return ret;
++}
++
++// FIXME: does not work on the Raspberry Pi Zero 2, the result is always zero
++static int get_st_clo_ts64(struct timespec64 *st_clo_ts64)
++{
++	phys_addr_t st_addr =
++#if IS_ENABLED(CONFIG_ARCH_MULTI_V6)
++		0x20003000; // Raspberry Pi Zero
++#else
++		0x3f003000; // Raspberry Pi Zero 2
++#endif
++
++	void *virt_st_addr =
++		memremap(st_addr, PAGE_SIZE, MEMREMAP_WT);
++	if (virt_st_addr == NULL) {
++		printk("get_st_clo_ts64: memremap failed\n");
++		return -ENOSYS;
++	}
++
++	uint32_t st_clo =
++		*(uint32_t *)((char *)virt_st_addr + 0x4);
++	memunmap(virt_st_addr);
++
++	st_clo_ts64->tv_sec = st_clo / USEC_PER_SEC;
++	st_clo_ts64->tv_nsec = (st_clo % USEC_PER_SEC) * NSEC_PER_USEC;
++	return 0;
++}
++
++static int polydisk_info_open(struct inode *inode, struct file *file)
++{
++	return 0;
++}
++
++static int polydisk_info_read(struct file *file, char __user *user_buffer, size_t size, loff_t* offset)
++{
++	char buf[128];
++
++	if (size <= 0) {
++		return 0;
++	}
++
++	int len = snprintf(
++		buf, sizeof(buf),
++		"boottime soc=%u.%03u kern=%u.%03u\nselect_btn init=%d cur=%d\n",
++		(uint32_t)fsg_boottime_soc.tv_sec,
++		(uint32_t)(fsg_boottime_soc.tv_nsec / NSEC_PER_MSEC),
++		(uint32_t)fsg_boottime_kernel.tv_sec,
++		(uint32_t)(fsg_boottime_kernel.tv_nsec / NSEC_PER_MSEC),
++		select_btn_pressed_init ? 1 : 0,
++		get_select_btn_pressed() ? 1 : 0);
++
++	int buf_offset = (int)*offset;
++	if (buf_offset < 0 || buf_offset >= len) {
++		return 0;
++	}
++
++	int copy_len = (int)min((size_t)(len - buf_offset), size);
++	if (copy_to_user(user_buffer, buf + buf_offset, copy_len)) {
++		return -EFAULT;
++	}
++
++	*offset += copy_len;
++	return copy_len;
++}
++
++static int polydisk_info_release(struct inode *inode, struct file *file)
++{
++	return 0;
++}
++
++static struct file_operations polydisk_info_fopts = {
++	.read = polydisk_info_read,
++	.open = polydisk_info_open,
++	.release = polydisk_info_release
++};
++
++static bool probe_imgs_dev(void)
++{
++	struct class_dev_iter iter;
++	struct device *dev;
++	bool found = false;
++
++	class_dev_iter_init(&iter, &block_class, NULL, &part_type);
++	while ((dev = class_dev_iter_next(&iter))) {
++		if (dev->devt == IMGS_DEV) {
++			found = true;
++			break;
++		}
++	}
++	class_dev_iter_exit(&iter);
++
++	return found;
++}
++
++static int mount_imgs(void *data)
++{
++	int ret;
++
++	struct path dev_path;
++	struct dentry *dev_dentry =
++		kern_path_create(AT_FDCWD, "/dev/imgs", &dev_path, 0);
++	if (IS_ERR(dev_dentry)) {
++		printk("kern_path_create(/dev/imgs) failed: %d\n", (int)dev_dentry);
++		ret = (int)dev_dentry;
++		goto err;
++	}
++
++	ret = vfs_mknod(mnt_idmap(dev_path.mnt), dev_path.dentry->d_inode,
++		dev_dentry, S_IFBLK | 0600, IMGS_DEV);
++	done_path_create(&dev_path, dev_dentry);
++	if (ret != 0) {
++		printk("vfs_mknod(/dev/imgs) failed: %d\n", ret);
++		goto err;
++	}
++
++	struct path mnt_path;
++	struct dentry *mnt_dentry = kern_path_create(
++		AT_FDCWD, "/imgs", &mnt_path, LOOKUP_DIRECTORY);
++	if (IS_ERR(mnt_dentry)) {
++		printk("kern_path_create(/imgs) failed: %d\n", (int)mnt_dentry);
++		ret = (int)mnt_dentry;
++		goto err;
++	}
++
++	ret = vfs_mkdir(mnt_idmap(mnt_path.mnt), mnt_path.dentry->d_inode,
++		mnt_dentry, 0777);
++	done_path_create(&mnt_path, mnt_dentry);
++	if (ret != 0) {
++		printk("vfs_mkdir(/imgs) failed: %d\n", ret);
++		goto err;
++	}
++
++	mnt_path.dentry = mnt_dentry;
++
++	int wait = 200;
++	schedule();
++	if (!probe_imgs_dev()) {
++		printk("mount_imgs: waiting for /dev/imgs\n");
++		do {
++			msleep(10);
++		} while (!probe_imgs_dev() && --wait > 0);
++
++		if (wait <= 0) {
++			imgs_mounted = -ENODEV;
++			return 0;
++		}
++
++		printk("mount_imgs: /dev/imgs appeared\n");
++	}
++
++	// MS_RDONLY	1
++	ret = path_mount("/dev/imgs", &mnt_path, saved_images_fs,
++		saved_image[0] != '\0' && !saved_image_ro ? 0 : 1, "");
++	if (ret != 0) {
++		printk("path_mount(/dev/imgs, /imgs, %s) failed: %d\n",
++			saved_images_fs, ret);
++		goto err;
++	}
++
++	printk("imgs mounted");
++	imgs_mounted = 1;
++	return 0;
++
++err:
++	imgs_mounted = ret;
++	return ret;
++}
++
++static int __init init_mount_imgs(void)
++{
++	void *ret = kthread_run(&mount_imgs, NULL, "mount_imgs");
++	if (IS_ERR(ret)) {
++		printk("init_mount_imgs: kthread_run failed: %d\n", (int)ret);
++		return (int)ret;
++	}
++
++	return 0;
++}
++device_initcall(init_mount_imgs);
++
++static int setup_polydisk_fsg(struct config_group *function_group)
++{
++	int ret;
++	if (saved_image[0] == '\0') {
++		printk("setup_polydisk_fsg: no image specified, skipping\n");
++		return 0;
++	}
++
++	if (select_btn_pressed_init) {
++		printk("setup_polydisk_fsg: select button pressed, skipping\n");
++		return 0;
++	}
++
++	printk("setup_polydisk_fsg: configuring %s as cdrom=%d ro=%d\n",
++		saved_image, saved_image_cdrom, saved_image_ro);
++
++	struct usb_function_instance *fi = container_of(
++		function_group, struct usb_function_instance, group);
++
++	struct fsg_opts *opts = container_of(fi, struct fsg_opts, func_inst);
++
++	opts->common->can_stall = 0;
++	opts->lun0.lun->removable = 1;
++	opts->lun0.lun->cdrom = saved_image_cdrom;
++	opts->lun0.lun->ro = saved_image_ro;
++	ret = snprintf(opts->lun0.lun->inquiry_string,
++		sizeof(opts->lun0.lun->inquiry_string),
++		"%-8s%-16s%-4s", saved_inquiry_vendor,
++		saved_inquiry_product, saved_inquiry_revision);
++	if (ret < 0) {
++		printk("failed to set inquiry_string: %d\n", ret);
++	}
++
++	schedule();
++	if (imgs_mounted == 0) {
++		printk("setup_polydisk_fsg: waiting for imgs_mounted ...\n");
++		do {
++			schedule();
++		} while (imgs_mounted == 0);
++	}
++
++	ssize_t img_size = fsg_store_file(opts->lun0.lun,
++		&opts->common->filesem, saved_image,
++		strlen(saved_image));
++	if (img_size < 0) {
++		printk("fsg_store_file failed: %d\n", (int)img_size);
++		return (int)img_size;
++	}
++
++	return 1;
++}
++
++static int __init init_polydisk(void)
++{
++	int ret;
++
++	printk("begin init_polydisk\n");
++
++	act_led = led_get_first();
++	if (!act_led) {
++		printk("ACT led not found\n");
++	}
++
++	set_led("default-on");
++
++	ret = setup_polydisk_gadget(&setup_polydisk_fsg);
++	if (ret != 0) {
++		set_led("timer");
++		return ret;
++	}
++
++	set_led("actpwr");
++
++	get_st_clo_ts64(&fsg_boottime_soc);
++	ktime_get_ts64(&fsg_boottime_kernel);
++
++	ret = register_chrdev(241, "polydisk-info", &polydisk_info_fopts);
++	if (ret != 0) {
++		printk("register_chrdev(polydisk-info) failed: %d\n", ret);
++		return ret;
++	}
++
++	printk("end init_polydisk, soc_uptime: %u.%03u, kernel_uptime: %u.%03u\n",
++	    (uint32_t)fsg_boottime_soc.tv_sec,
++	    (uint32_t)(fsg_boottime_soc.tv_nsec / NSEC_PER_MSEC),
++	    (uint32_t)fsg_boottime_kernel.tv_sec,
++	    (uint32_t)(fsg_boottime_kernel.tv_nsec / NSEC_PER_MSEC));
++
++	return 0;
++}
++late_initcall(init_polydisk);
